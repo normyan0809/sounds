@@ -1,0 +1,6 @@
+{
+  "name": "Sonic Fourier",
+  "description": "A real-time audio spectrum analyzer demonstrating Fast Fourier Transform (FFT) using the Web Audio API.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": []
+}
