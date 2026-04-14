@@ -5,11 +5,14 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Mic, MicOff, Activity, BarChart3, Info, Settings2, Wind, Volume2, ShieldCheck } from 'lucide-react';
+import { Mic, MicOff, Activity, BarChart3, Info, Settings2, Wind, Volume2, ShieldCheck, Square, Play, Trash2, Download } from 'lucide-react';
 
 export default function App() {
   const [isListening, setIsListening] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
   const [isNoiseReductionEnabled, setIsNoiseReductionEnabled] = useState(false);
+  const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null);
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -19,6 +22,8 @@ export default function App() {
   const compressorRef = useRef<DynamicsCompressorNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const animationRef = useRef<number | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
   
   const waveformCanvasRef = useRef<HTMLCanvasElement>(null);
   const spectrumCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -42,13 +47,11 @@ export default function App() {
 
       // Noise Reduction Chain
       if (isNoiseReductionEnabled) {
-        // 1. High-pass filter to remove low-frequency rumble (fan noise, etc.)
         const filter = audioContext.createBiquadFilter();
         filter.type = 'highpass';
-        filter.frequency.value = 150; // Cut below 150Hz
+        filter.frequency.value = 150;
         filterRef.current = filter;
 
-        // 2. Dynamics Compressor to normalize peaks and reduce background hiss impact
         const compressor = audioContext.createDynamicsCompressor();
         compressor.threshold.setValueAtTime(-50, audioContext.currentTime);
         compressor.knee.setValueAtTime(40, audioContext.currentTime);
@@ -57,12 +60,10 @@ export default function App() {
         compressor.release.setValueAtTime(0.25, audioContext.currentTime);
         compressorRef.current = compressor;
 
-        // Chain: Source -> Filter -> Compressor -> Analyser
         source.connect(filter);
         filter.connect(compressor);
         compressor.connect(analyser);
       } else {
-        // Direct: Source -> Analyser
         source.connect(analyser);
       }
 
@@ -75,6 +76,9 @@ export default function App() {
   };
 
   const stopListening = () => {
+    if (isRecording) {
+      stopRecording();
+    }
     if (animationRef.current) {
       cancelAnimationFrame(animationRef.current);
     }
@@ -87,15 +91,51 @@ export default function App() {
     setIsListening(false);
   };
 
-  // Toggle noise reduction while listening
+  const startRecording = () => {
+    if (!streamRef.current) return;
+    
+    chunksRef.current = [];
+    const mediaRecorder = new MediaRecorder(streamRef.current);
+    mediaRecorderRef.current = mediaRecorder;
+
+    mediaRecorder.ondataavailable = (e) => {
+      if (e.data.size > 0) {
+        chunksRef.current.push(e.data);
+      }
+    };
+
+    mediaRecorder.onstop = () => {
+      const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
+      const url = URL.createObjectURL(blob);
+      setRecordedBlob(blob);
+      setAudioUrl(url);
+    };
+
+    mediaRecorder.start();
+    setIsRecording(true);
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+    }
+  };
+
+  const deleteRecording = () => {
+    if (audioUrl) {
+      URL.revokeObjectURL(audioUrl);
+    }
+    setRecordedBlob(null);
+    setAudioUrl(null);
+  };
+
   const toggleNoiseReduction = () => {
     const newState = !isNoiseReductionEnabled;
     setIsNoiseReductionEnabled(newState);
     
-    // If already listening, we need to rebuild the chain
     if (isListening) {
       stopListening();
-      // Small delay to ensure context is closed before restarting
       setTimeout(() => {
         startListening();
       }, 100);
@@ -249,39 +289,106 @@ export default function App() {
                 <span>降噪模式: {isNoiseReductionEnabled ? '开启' : '关闭'}</span>
               </motion.button>
 
-              <motion.button
-                whileHover={{ scale: 1.02 }}
-                whileTap={{ scale: 0.98 }}
-                onClick={isListening ? stopListening : startListening}
-                className={`
-                  relative group flex items-center gap-3 px-8 py-4 rounded-2xl font-bold text-lg transition-all
-                  ${isListening 
-                    ? 'bg-red-500 text-white shadow-lg shadow-red-500/25' 
-                    : 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/25'}
-                `}
-              >
-              {isListening ? (
-                <>
-                  <MicOff size={24} />
-                  <span>停止监听</span>
-                </>
-              ) : (
-                <>
-                  <Mic size={24} />
-                  <span>开始监听</span>
-                </>
-              )}
-              
-              {isListening && (
-                <span className="absolute -top-1 -right-1 flex h-4 w-4">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-4 w-4 bg-red-500 border-2 border-slate-900"></span>
-                </span>
-              )}
-            </motion.button>
+              <div className="flex items-center gap-2">
+                <motion.button
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={isListening ? stopListening : startListening}
+                  className={`
+                    relative group flex items-center gap-3 px-8 py-4 rounded-2xl font-bold text-lg transition-all
+                    ${isListening 
+                      ? 'bg-red-500 text-white shadow-lg shadow-red-500/25' 
+                      : 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/25'}
+                  `}
+                >
+                  {isListening ? (
+                    <>
+                      <MicOff size={24} />
+                      <span>停止监听</span>
+                    </>
+                  ) : (
+                    <>
+                      <Mic size={24} />
+                      <span>开始监听</span>
+                    </>
+                  )}
+                  
+                  {isListening && (
+                    <span className="absolute -top-1 -right-1 flex h-4 w-4">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-4 w-4 bg-red-500 border-2 border-slate-900"></span>
+                    </span>
+                  )}
+                </motion.button>
+
+                {isListening && (
+                  <motion.button
+                    initial={{ opacity: 0, x: -20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
+                    onClick={isRecording ? stopRecording : startRecording}
+                    className={`
+                      p-4 rounded-2xl transition-all border shadow-lg
+                      ${isRecording 
+                        ? 'bg-red-500/20 border-red-500 text-red-500 animate-pulse' 
+                        : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white'}
+                    `}
+                    title={isRecording ? "停止录音" : "开始录音"}
+                  >
+                    {isRecording ? <Square size={24} fill="currentColor" /> : <div className="w-6 h-6 rounded-full bg-red-500" />}
+                  </motion.button>
+                )}
+              </div>
+            </div>
           </div>
-        </div>
-      </section>
+        </section>
+
+        {/* Playback Section */}
+        <AnimatePresence>
+          {audioUrl && (
+            <motion.section
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl overflow-hidden"
+            >
+              <div className="flex flex-col md:flex-row items-center justify-between gap-6">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 bg-blue-500/20 rounded-full flex items-center justify-center text-blue-400">
+                    <Volume2 size={24} />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-white">录音回放</h3>
+                    <p className="text-xs text-slate-500 font-mono uppercase tracking-widest">Recorded Audio Ready</p>
+                  </div>
+                </div>
+
+                <div className="flex-1 max-w-md w-full">
+                  <audio src={audioUrl} controls className="w-full h-10 accent-emerald-500" />
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <a 
+                    href={audioUrl} 
+                    download="recording.webm"
+                    className="p-3 bg-slate-800 border border-slate-700 text-slate-400 hover:text-white rounded-xl transition-all"
+                    title="下载录音"
+                  >
+                    <Download size={20} />
+                  </a>
+                  <button 
+                    onClick={deleteRecording}
+                    className="p-3 bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500 hover:text-white rounded-xl transition-all"
+                    title="删除录音"
+                  >
+                    <Trash2 size={20} />
+                  </button>
+                </div>
+              </div>
+            </motion.section>
+          )}
+        </AnimatePresence>
 
         {/* Visualizers */}
         <div className="grid grid-cols-1 gap-8">
