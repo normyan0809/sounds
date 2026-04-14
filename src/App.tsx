@@ -5,15 +5,18 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Mic, MicOff, Activity, BarChart3, Info, Settings2 } from 'lucide-react';
+import { Mic, MicOff, Activity, BarChart3, Info, Settings2, Wind, Volume2, ShieldCheck } from 'lucide-react';
 
 export default function App() {
   const [isListening, setIsListening] = useState(false);
+  const [isNoiseReductionEnabled, setIsNoiseReductionEnabled] = useState(false);
   const [error, setError] = useState<string | null>(null);
   
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const filterRef = useRef<BiquadFilterNode | null>(null);
+  const compressorRef = useRef<DynamicsCompressorNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const animationRef = useRef<number | null>(null);
   
@@ -35,8 +38,33 @@ export default function App() {
       analyserRef.current = analyser;
 
       const source = audioContext.createMediaStreamSource(stream);
-      source.connect(analyser);
       sourceRef.current = source;
+
+      // Noise Reduction Chain
+      if (isNoiseReductionEnabled) {
+        // 1. High-pass filter to remove low-frequency rumble (fan noise, etc.)
+        const filter = audioContext.createBiquadFilter();
+        filter.type = 'highpass';
+        filter.frequency.value = 150; // Cut below 150Hz
+        filterRef.current = filter;
+
+        // 2. Dynamics Compressor to normalize peaks and reduce background hiss impact
+        const compressor = audioContext.createDynamicsCompressor();
+        compressor.threshold.setValueAtTime(-50, audioContext.currentTime);
+        compressor.knee.setValueAtTime(40, audioContext.currentTime);
+        compressor.ratio.setValueAtTime(12, audioContext.currentTime);
+        compressor.attack.setValueAtTime(0, audioContext.currentTime);
+        compressor.release.setValueAtTime(0.25, audioContext.currentTime);
+        compressorRef.current = compressor;
+
+        // Chain: Source -> Filter -> Compressor -> Analyser
+        source.connect(filter);
+        filter.connect(compressor);
+        compressor.connect(analyser);
+      } else {
+        // Direct: Source -> Analyser
+        source.connect(analyser);
+      }
 
       setIsListening(true);
       draw();
@@ -57,6 +85,21 @@ export default function App() {
       audioContextRef.current.close();
     }
     setIsListening(false);
+  };
+
+  // Toggle noise reduction while listening
+  const toggleNoiseReduction = () => {
+    const newState = !isNoiseReductionEnabled;
+    setIsNoiseReductionEnabled(newState);
+    
+    // If already listening, we need to rebuild the chain
+    if (isListening) {
+      stopListening();
+      // Small delay to ensure context is closed before restarting
+      setTimeout(() => {
+        startListening();
+      }, 100);
+    }
   };
 
   const draw = () => {
@@ -190,17 +233,33 @@ export default function App() {
               )}
             </div>
 
-            <motion.button
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.98 }}
-              onClick={isListening ? stopListening : startListening}
-              className={`
-                relative group flex items-center gap-3 px-8 py-4 rounded-2xl font-bold text-lg transition-all
-                ${isListening 
-                  ? 'bg-red-500 text-white shadow-lg shadow-red-500/25' 
-                  : 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/25'}
-              `}
-            >
+            <div className="flex flex-col sm:flex-row items-center gap-4">
+              <motion.button
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+                onClick={toggleNoiseReduction}
+                className={`
+                  flex items-center gap-2 px-6 py-4 rounded-2xl font-semibold transition-all border
+                  ${isNoiseReductionEnabled 
+                    ? 'bg-blue-500/20 border-blue-500 text-blue-400 shadow-lg shadow-blue-500/10' 
+                    : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-600'}
+                `}
+              >
+                {isNoiseReductionEnabled ? <ShieldCheck size={20} /> : <Wind size={20} />}
+                <span>降噪模式: {isNoiseReductionEnabled ? '开启' : '关闭'}</span>
+              </motion.button>
+
+              <motion.button
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+                onClick={isListening ? stopListening : startListening}
+                className={`
+                  relative group flex items-center gap-3 px-8 py-4 rounded-2xl font-bold text-lg transition-all
+                  ${isListening 
+                    ? 'bg-red-500 text-white shadow-lg shadow-red-500/25' 
+                    : 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/25'}
+                `}
+              >
               {isListening ? (
                 <>
                   <MicOff size={24} />
@@ -221,7 +280,8 @@ export default function App() {
               )}
             </motion.button>
           </div>
-        </section>
+        </div>
+      </section>
 
         {/* Visualizers */}
         <div className="grid grid-cols-1 gap-8">
@@ -300,9 +360,9 @@ export default function App() {
             </p>
           </div>
           <div className="p-6 bg-slate-900/50 border border-slate-800 rounded-2xl space-y-2">
-            <h4 className="text-white font-bold text-sm">技术细节</h4>
+            <h4 className="text-white font-bold text-sm">降噪原理 (Noise Reduction)</h4>
             <p className="text-xs text-slate-400 leading-relaxed">
-              本应用使用 Web Audio API 的 AnalyserNode。FFT 大小设为 2048，每秒进行 60 次实时计算与渲染。
+              开启降噪后，系统会启用**高通滤波器 (High-pass Filter)** 过滤 150Hz 以下的低频噪音（如风扇声），并配合**动态压缩器 (Compressor)** 平滑音量波动。
             </p>
           </div>
         </footer>
